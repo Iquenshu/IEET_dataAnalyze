@@ -1,5 +1,7 @@
 import pyodbc
 
+#全部程式accessdb讀取程式
+
 # 預設 Access 資料庫路徑（全專案共用）
 DEFAULT_ACCESS_PATH = r'D:\113年後資料\系辦辦公相關\IEET認證\python程式\PythonIEET\PythonIEET\IEETdatabase.accdb'
 

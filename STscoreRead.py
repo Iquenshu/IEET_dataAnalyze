@@ -3,6 +3,8 @@ import os
 from Accessdb import AccessHelper
 import time
 
+# 學生成績讀取程式
+
 # 1. 設定檔案與資料表
 data_path = r'input_files\學生成績\電機系100-108學年度大學部碩士班開課學生成績(所有修課學生)1140829test.xlsx'
 table_name = 'STscore'

@@ -2,6 +2,8 @@ import pandas as pd
 import os
 from Accessdb import AccessHelper
 
+# 離系問卷資料讀取程式（大學部）
+
 # 1. 設定檔案與資料表
 data_path = r'input_files\問券\離系問券資料\data_大學部問券0805.xlsx' # 你也可以改成 .xlsx
 table_name = 'LeavDepUdata'

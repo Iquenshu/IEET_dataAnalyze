@@ -2,6 +2,8 @@ import pandas as pd
 import os
 from Accessdb import AccessHelper
 
+# 畢業系友流向問卷匯入程式
+
 def import_alumni_survey():
     # 1. 設定檔案路徑
     # 這裡假設您將檔案放在 "input_files\畢業系友流向問券" 資料夾下

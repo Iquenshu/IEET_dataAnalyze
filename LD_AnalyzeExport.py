@@ -6,6 +6,8 @@ import os
 import uuid
 from datetime import datetime
 
+
+
 db = AccessHelper()
 
 # 取得今天日期字串，格式：YYYYMMDD
