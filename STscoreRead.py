@@ -1,104 +1,182 @@
 import pandas as pd
+import pyodbc
 import os
-from Accessdb import AccessHelper
 import time
 
-# 學生成績讀取程式
-
+# ==========================================
 # 1. 設定檔案與資料表
-data_path = r'input_files\學生成績\電機系100-108學年度大學部碩士班開課學生成績(所有修課學生)1140829test.xlsx'
+# ==========================================
+db_path = 'IEETdatabase.accdb'
+data_path = r'input_files\學生成績\電機系109-113學年度大學部及碩士班博士班學生所有成績.xlsx'
 table_name = 'STscore'
+BATCH_SIZE = 1000  # 設定每 1000 筆寫入一次並顯示進度
 
-# 2. 欄位清單
-columns = [
-    '學年度', '學期', '開課系所代碼', '開課系所', '課號', '課程名稱', '必選修',
-    '學號', '姓名', '學分數', '成績', '等第成績'
-]
+# ==========================================
+# 2. 資料庫連線工具
+# ==========================================
+def get_db_connection():
+    full_db_path = os.path.abspath(db_path)
+    conn_str = (
+        r'DRIVER={Microsoft Access Driver (*.mdb, *.accdb)};'
+        rf'DBQ={full_db_path};'
+    )
+    return pyodbc.connect(conn_str)
 
-print(f"正在讀取 Excel 檔案... (請稍候)")
-start_time = time.time()
+def clean_key_str(val):
+    """將資料庫或 Excel 的值統一轉為乾淨的字串 (去除 .0 與 空白)"""
+    if pd.isna(val) or val is None:
+        return ""
+    # 先轉字串 -> 去除前後空白 -> 如果有 .0 結尾則去除
+    s = str(val).strip()
+    if s.endswith('.0'):
+        s = s[:-2]
+    return s
 
-# 讀取 Excel
-ext = os.path.splitext(data_path)[1].lower()
-if ext == '.csv':
-    df = pd.read_csv(data_path, encoding='utf-8', dtype=str)
-else:
-    df = pd.read_excel(data_path, dtype=str)
-
-df = df[columns]
-# 數字轉型與過濾
-df['學分數'] = pd.to_numeric(df['學分數'], errors='coerce')
-df['成績'] = pd.to_numeric(df['成績'], errors='coerce')
-df = df[df['學號'].fillna('').str.strip() != '']
-
-print(f"Excel 讀取完成，共 {len(df)} 筆。正在載入資料庫比對索引...")
-
-# --- 極速比對與穩定寫入 ---
-db = AccessHelper()
-
-# 1. 抓取現有資料指紋
-existing_keys = set()
-try:
-    cursor = db.conn.cursor()
-    cursor.execute(f"SELECT 學號, 課號, 學年度, 學期 FROM {table_name}")
-    rows = cursor.fetchall()
-    for r in rows:
-        # 建立指紋: (學號, 課號, 學年度, 學期)
-        key = (str(r[0]), str(r[1]), str(r[2]), str(r[3]))
-        existing_keys.add(key)
-    print(f"資料庫現有 {len(existing_keys)} 筆資料，開始進行記憶體比對...")
-except Exception as e:
-    print("讀取資料庫索引失敗，程式停止。", e)
-    db.close()
-    exit()
-
-# 2. 準備要寫入的資料
-rows_to_insert = []
-duplicate_count = 0
-
-for _, row in df.iterrows():
-    current_key = (str(row['學號']), str(row['課號']), str(row['學年度']), str(row['學期']))
+# ==========================================
+# 3. 主程式邏輯
+# ==========================================
+def import_scores():
+    print(f"正在讀取 Excel 檔案: {os.path.basename(data_path)} ...")
     
-    if current_key in existing_keys:
-        duplicate_count += 1
-    else:
-        # 準備插入的資料 Tuple
-        rows_to_insert.append(tuple(row[col] for col in columns))
-        # 加入指紋避免 Excel 內重複
-        existing_keys.add(current_key)
+    if not os.path.exists(data_path):
+        print(f"錯誤：找不到檔案 {data_path}")
+        return
 
-# 3. 使用「交易模式」批次寫入 (穩定且快速)
-import_count = len(rows_to_insert)
-if import_count > 0:
-    print(f"正在寫入 {import_count} 筆新資料 (使用交易模式)...")
-    
+    # 1. 讀取 Excel
     try:
-        # 手動開啟 Cursor 進行交易控制
-        cursor = db.conn.cursor()
-        
-        # 關閉自動提交，開啟交易模式
-        db.conn.autocommit = False 
-        
-        insert_sql = f"INSERT INTO {table_name} ({','.join(columns)}) VALUES ({','.join(['?']*len(columns))})"
-        
-        # 執行多筆寫入 (不使用 fast_executemany，避免 Access 崩潰)
-        cursor.executemany(insert_sql, rows_to_insert)
-        
-        # 一次提交所有變更
-        db.conn.commit()
-        
-        # 恢復自動提交
-        db.conn.autocommit = True
-        
-        print(f"寫入成功！")
-        
+        df = pd.read_excel(data_path)
     except Exception as e:
-        db.conn.rollback() # 發生錯誤則回滾
-        print("寫入失敗，已還原變更。錯誤訊息：", e)
-else:
-    print("沒有需要寫入的新資料。")
+        print(f"Excel 讀取失敗: {e}")
+        return
 
-db.close()
-end_time = time.time()
-print(f"處理完成！耗時 {end_time - start_time:.2f} 秒")
-print(f"重複資料(略過)：{duplicate_count} 筆，成功匯入：{import_count} 筆")
+    # 2. 欄位處理
+    df.columns = [c.strip() for c in df.columns]
+    
+    rename_map = {'系所代碼': '開課系所代碼', '系所': '開課系所'}
+    df.rename(columns=rename_map, inplace=True)
+
+    # 處理重複成績
+    if '成績.1' in df.columns:
+        print("-> 偵測到雙重成績欄位，使用第二欄作為最終成績。")
+        df['成績'] = df['成績.1']
+
+    # 補齊必選修
+    if '必選修' not in df.columns:
+        df['必選修'] = '' 
+
+    # 3. 資料清洗
+    required_cols = [
+        '學年度', '學期', '開課系所代碼', '開課系所', '課號', '課程名稱', '必選修',
+        '學號', '姓名', '學分數', '成績', '等第成績'
+    ]
+    
+    # 確保只有需要的欄位
+    df_import = df[required_cols].copy()
+
+    # 型別轉換
+    df_import['學分數'] = pd.to_numeric(df_import['學分數'], errors='coerce').fillna(0)
+    df_import['成績'] = pd.to_numeric(df_import['成績'], errors='coerce').fillna(0)
+    
+    # 強制將關鍵欄位轉為乾淨字串 (比對用)
+    for col in ['學年度', '學期', '學號', '課號', '開課系所代碼']:
+        df_import[col] = df_import[col].apply(clean_key_str)
+
+    df_import['等第成績'] = df_import['等第成績'].astype(str).replace('nan', '').str.strip()
+
+    # 4. 退選處理 (成績999)
+    withdraw_mask = (df_import['成績'] == 999) & (df_import['等第成績'] == '')
+    if withdraw_mask.sum() > 0:
+        print(f"-> 標記 {withdraw_mask.sum()} 筆退選資料 (成績999)。")
+        df_import.loc[withdraw_mask, '等第成績'] = '退選'
+
+    # ==========================================
+    # 5. 資料庫比對 (嚴格模式)
+    # ==========================================
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    print("正在讀取資料庫現有資料 (建立比對指紋)...")
+    
+    # 抓取現有的 Key: 學年, 學期, 課號, 學號
+    cursor.execute("SELECT [學年度], [學期], [課號], [學號] FROM STscore")
+    existing_keys = set()
+    
+    rows = cursor.fetchall()
+    for row in rows:
+        # 使用相同的 clean_key_str 邏輯處理資料庫取出的資料
+        key = (
+            clean_key_str(row[0]), # 學年度
+            clean_key_str(row[1]), # 學期
+            clean_key_str(row[2]), # 課號
+            clean_key_str(row[3])  # 學號
+        )
+        existing_keys.add(key)
+    
+    print(f"資料庫現有 {len(existing_keys)} 筆不重複成績紀錄。")
+
+    # 準備要寫入的資料
+    data_to_insert = []
+    duplicate_count = 0
+    excel_internal_dupes = 0
+    
+    # 用來檢查 Excel 內部是否有重複 (有些 Excel 本身就會重複列)
+    current_batch_keys = set()
+
+    for row in df_import.itertuples(index=False):
+        # 建立這筆資料的 Key (順序需與 required_cols 對應)
+        # 0:學年度, 1:學期, 4:課號, 7:學號
+        current_key = (str(row[0]), str(row[1]), str(row[4]), str(row[7]))
+        
+        if current_key in existing_keys:
+            duplicate_count += 1
+        elif current_key in current_batch_keys:
+            excel_internal_dupes += 1
+        else:
+            data_to_insert.append(tuple(row))
+            current_batch_keys.add(current_key) # 加入暫存，避免本次匯入重複
+
+    # ==========================================
+    # 6. 分批寫入 (Batch Insert)
+    # ==========================================
+    total_insert = len(data_to_insert)
+    
+    if total_insert == 0:
+        print("-" * 30)
+        print("沒有需要寫入的新資料。")
+        print(f"資料庫重複: {duplicate_count} 筆")
+        print(f"Excel內部重複: {excel_internal_dupes} 筆")
+    else:
+        print(f"準備寫入 {total_insert} 筆新資料...")
+        if duplicate_count > 0:
+            print(f"(已過濾掉 {duplicate_count} 筆資料庫重複資料)")
+        
+        insert_sql = """
+            INSERT INTO STscore (
+                [學年度], [學期], [開課系所代碼], [開課系所], [課號], [課程名稱], [必選修],
+                [學號], [姓名], [學分數], [成績], [等第成績]
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        
+        try:
+            conn.autocommit = False
+            
+            for i in range(0, total_insert, BATCH_SIZE):
+                batch = data_to_insert[i : i + BATCH_SIZE]
+                cursor.executemany(insert_sql, batch)
+                conn.commit() # 每一批次提交一次
+                
+                # 顯示進度
+                current_count = min(i + BATCH_SIZE, total_insert)
+                print(f"進度: {current_count} / {total_insert} ... 完成")
+                
+            print("-" * 30)
+            print(f"全數匯入完成！共新增 {total_insert} 筆資料。")
+            
+        except Exception as e:
+            conn.rollback()
+            print(f"寫入過程中發生錯誤: {e}")
+        finally:
+            conn.close()
+
+if __name__ == "__main__":
+    import_scores()
