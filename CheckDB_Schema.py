@@ -1,6 +1,7 @@
 import pyodbc
 import os
 
+#資料庫結構檢測
 # 資料庫路徑
 db_path = 'IEETdatabase.accdb'
 

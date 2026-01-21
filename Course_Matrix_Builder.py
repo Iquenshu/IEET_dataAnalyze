@@ -1,21 +1,50 @@
 import pyodbc
 import pandas as pd
 import os
+import warnings
+
+# 忽略 SQLAlchemy 的警告
+warnings.filterwarnings("ignore", category=UserWarning)
 
 # ==========================================
 # 1. 設定與規則定義
 # ==========================================
 db_path = 'IEETdatabase.accdb'
 
-# 教育目標 (PEO) 判定規則
-# 根據您的描述：只要具備列表中的 "任一項" 核心能力 (Intersection)，即符合該目標
+# [重要] 資料庫欄位對照表 (完全依照您提供的 Schema 設定)
+col_map = {
+    # 基本資料
+    'course_id':     'course_id',
+    'academic_year': 'academic_year',
+    'semester':      'semester',
+    'course_code':   'course_code',
+    'course_name':   'course_name',
+    
+    # 平均分數 (依照您提供的 Schema)
+    'course_score_AVG': 'course_score_AVG', 
+
+    # 核心能力 (K1~K5)
+    'K1': 'has_SO_K1',
+    'K2': 'has_SO_K2',
+    'K3': 'has_SO_K3',
+    'K4': 'has_SO_K4',
+    'K5': 'has_SO_K5',
+    
+    # 教育目標 (PEO)
+    'PEO_Theory': 'is_PEO_Theory',      # 學識理論
+    'PEO_Tech':   'is_PEO_Skill',       # 專業技術
+    'PEO_Team':   'is_PEO_Ethics',      # 團隊合作與工程倫理
+    'PEO_Innov':  'is_PEO_innovation',  # 獨立思考與創新
+    'PEO_Global': 'is_PEO_Global'       # 國際視野
+}
+
+# 教育目標判定規則 (任一符合即算符合)
 peo_rules = {
-    # 欄位名稱 (英) : [需要的核心能力 K1~K5]
-    'PEO_Theory':   [1, 2, 4, 5],     # 學識理論
-    'PEO_Tech':     [1, 2, 3],        # 專業技術
-    'PEO_Team':     [3, 4],           # 團隊合作與工程倫理
-    'PEO_Innov':    [1, 2, 3, 4, 5],  # 獨立思考與創新 (全部都算)
-    'PEO_Global':   [4, 5]            # 國際視野
+    'PEO_Theory': [1, 2, 4, 5],
+    'PEO_Tech':   [1, 2, 3],
+    'PEO_Team':   [3, 4],
+    'PEO_Innov':  [1, 2, 3, 4, 5],
+    'PEO_Global': [4, 5]
 }
 
 # ==========================================
@@ -30,58 +59,86 @@ def get_db_connection():
     return pyodbc.connect(conn_str)
 
 # ==========================================
-# 3. 建立資料表結構
+# 3. 功能模組
 # ==========================================
-def init_matrix_table(cursor):
-    # 為了確保欄位正確，這裡採用「重建」策略
-    # 如果您想保留手動修改的表，請註解掉 DROP TABLE，並確保下方 INSERT 欄位名稱與您的一致
-    try:
-        cursor.execute("DROP TABLE Course_Matrix")
-        cursor.commit()
-        print("舊有的 Course_Matrix 已清除。")
-    except:
-        pass # 表不存在，忽略錯誤
 
-    print("正在建立新資料表 Course_Matrix ...")
-    
-    # 建立符合 5 項教育目標的結構
-    # K1~K5 代表核心能力
-    sql = """
-    CREATE TABLE Course_Matrix (
-        id COUNTER CONSTRAINT PrimaryKey PRIMARY KEY,
-        course_id LONG,
-        academic_year LONG,
-        semester LONG,
-        course_code TEXT(50),
-        course_name TEXT(255),
-        
-        has_K1 BIT, has_K2 BIT, has_K3 BIT, has_K4 BIT, has_K5 BIT,
-        
-        PEO_Theory BIT,   -- 學識理論
-        PEO_Tech BIT,     -- 專業技術
-        PEO_Team BIT,     -- 團隊合作與工程倫理
-        PEO_Innov BIT,    -- 獨立思考與創新
-        PEO_Global BIT    -- 國際視野
-    )
+def calculate_course_averages(conn):
     """
-    cursor.execute(sql)
-    cursor.commit()
+    從 STscore 計算每門課的平均分
+    規則：排除 '退選' 與 分數 999
+    """
+    print("正在計算各課程平均分數 (排除退選)...")
+    
+    # 讀取成績資料
+    sql = "SELECT [學年度], [學期], [課號], [成績], [等第成績] FROM STscore"
+    try:
+        df_score = pd.read_sql(sql, conn)
+    except Exception as e:
+        print(f"讀取 STscore 失敗: {e}")
+        return pd.DataFrame() 
 
-# ==========================================
-# 4. 主分析邏輯
-# ==========================================
+    # 資料清洗
+    df_score['成績'] = pd.to_numeric(df_score['成績'], errors='coerce')
+    
+    # 排除無效成績 (999 或 退選)
+    # 注意：這裡將所有相關欄位轉為字串再去除空白，確保比對準確
+    df_valid = df_score[
+        (df_score['成績'] != 999) & 
+        (df_score['等第成績'].astype(str).str.strip() != '退選') &
+        (df_score['成績'].notna())
+    ].copy()
+
+    if len(df_valid) == 0:
+        print("警告：沒有有效的成績資料可供計算。")
+        return pd.DataFrame()
+
+    # 型別標準化 (確保能跟 Courses 表對上)
+    try:
+        # 將學年度/學期轉為整數，去除 .0
+        df_valid['學年度'] = pd.to_numeric(df_valid['學年度'], errors='coerce').fillna(0).astype(int)
+        df_valid['學期'] = pd.to_numeric(df_valid['學期'], errors='coerce').fillna(0).astype(int)
+        df_valid['課號'] = df_valid['課號'].astype(str).str.strip()
+    except Exception as e:
+        print(f"型別轉換錯誤: {e}")
+
+    # 分組計算平均
+    avg_df = df_valid.groupby(['學年度', '學期', '課號'])['成績'].mean().reset_index()
+    avg_df.rename(columns={'成績': 'avg_score'}, inplace=True)
+    avg_df['avg_score'] = avg_df['avg_score'].round(2)
+    
+    print(f"已計算 {len(avg_df)} 門課程的平均成績。")
+    return avg_df
+
 def build_matrix():
     conn = get_db_connection()
     cursor = conn.cursor()
     
-    # 1. 初始化資料表
-    init_matrix_table(cursor)
-    
-    print("正在分析課程核心能力 (K1-K5)...")
-    
-    # 2. 抓取資料：Courses + Course_Competencies
-    # 我們需要知道每一門課，到底勾選了哪些 SMC (評量方式)
-    sql = """
+    # 1. 檢查資料表結構是否存在 (防呆)
+    try:
+        # 測試讀取關鍵欄位
+        check_col = col_map['K1'] 
+        cursor.execute(f"SELECT TOP 1 [{check_col}] FROM Course_Matrix")
+    except Exception as e:
+        print("錯誤：無法存取 Course_Matrix 資料表或欄位名稱不符。")
+        print(f"請確認 Access 資料表 [Course_Matrix] 中是否有 [{check_col}] 這個欄位？")
+        print(f"系統錯誤訊息: {e}")
+        return
+
+    # 2. 清空舊數據 (保留結構，不刪除表)
+    print("正在清空 Course_Matrix 舊有數據...")
+    try:
+        cursor.execute("DELETE FROM Course_Matrix")
+        cursor.commit()
+    except Exception as e:
+        print(f"清除資料失敗: {e}")
+        return
+
+    # 3. 取得平均分數表
+    df_avgs = calculate_course_averages(conn)
+
+    # 4. 分析課程核心能力 (K1-K5)
+    print("正在整合課程、能力指標與平均分數...")
+    sql_courses = """
         SELECT 
             C.id AS course_id, C.academic_year, C.semester, C.course_code, C.course_name,
             CC.competency_desc,
@@ -90,109 +147,126 @@ def build_matrix():
         FROM Courses AS C
         LEFT JOIN Course_Competencies AS CC ON C.id = CC.course_id
     """
+    try:
+        df_courses = pd.read_sql(sql_courses, conn)
+    except Exception as e:
+        print(f"讀取 Courses 失敗: {e}")
+        return
     
-    df = pd.read_sql(sql, conn)
-    
-    print(f"原始資料共 {len(df)} 筆能力細項，開始聚合運算...")
-    
-    # 用 Dictionary 來整合每一門課的數據 (Key = course_id)
+    # 5. 聚合運算 (Aggregation)
     matrix_data = {} 
     
-    for _, row in df.iterrows():
+    print(f"正在處理 {len(df_courses)} 筆課程能力資料...")
+    
+    for _, row in df_courses.iterrows():
         c_id = row['course_id']
         
-        # 初始化該課程 (如果尚未存在於 dict)
+        # 初始化
         if c_id not in matrix_data:
             matrix_data[c_id] = {
                 'course_id': c_id,
-                'academic_year': row['academic_year'],
-                'semester': row['semester'],
-                'course_code': row['course_code'],
+                'academic_year': int(row['academic_year']),
+                'semester': int(row['semester']),
+                'course_code': str(row['course_code']).strip(),
                 'course_name': row['course_name'],
-                # 預設所有 K 能力為 False
-                'has_K1': False, 'has_K2': False, 'has_K3': False, 
-                'has_K4': False, 'has_K5': False
+                # K1~K5
+                1: False, 2: False, 3: False, 4: False, 5: False,
+                # 平均分 (初始化為 None)
+                'course_score_AVG': None
             }
         
-        # 解析這一行代表哪一個 K (1~5)
+        # 處理 K 能力
         comp_desc = str(row['competency_desc']).strip()
-        if not comp_desc or comp_desc == 'None':
-            continue
+        if comp_desc and comp_desc != 'None':
+            k_num = 0
+            try:
+                # 嘗試解析開頭數字
+                first_char = comp_desc[0]
+                if first_char in '１２３４５': # 全形
+                    k_num = {'１':1, '２':2, '３':3, '４':4, '５':5}[first_char]
+                elif first_char.isdigit(): 
+                    k_num = int(first_char)
+            except: 
+                pass
             
-        # 假設描述是以數字開頭 (例如 "1.整合...", "3.具備...")
-        try:
-            # 取第一個字元轉數字，並確保它是半形數字
-            first_char = comp_desc[0]
-            # 針對全形數字簡單轉換 (防止資料有 １. xxx)
-            if first_char in '１２３４５':
-                mapping = {'１':1, '２':2, '３':3, '４':4, '５':5}
-                k_num = mapping[first_char]
-            else:
-                k_num = int(first_char)
-        except:
-            continue # 無法辨識編號，跳過
+            # 檢查 SMC 是否有勾選 (Access CheckBox: True/-1/1)
+            has_assessment = any(row[f'smc_{i}'] for i in range(11))
             
-        # 檢查 SMC 是否有勾選 (Access True可能是 -1 或 1)
-        has_assessment = False
-        for i in range(11):
-            val = row[f'smc_{i}']
-            if val: # Truthy check
-                has_assessment = True
-                break
-        
-        # 如果有評量方式，且編號在 1~5 之間，標記為具備該能力
-        if has_assessment and 1 <= k_num <= 5:
-            matrix_data[c_id][f'has_K{k_num}'] = True
+            if has_assessment and 1 <= k_num <= 5:
+                matrix_data[c_id][k_num] = True
 
-    # 3. 計算 PEO 符合度並寫入
-    print("正在計算 5 大教育目標符合度...")
+    # 6. 合併平均分數
+    # 建立快速查詢表: (year, sem, code) -> score
+    avg_lookup = {}
+    if not df_avgs.empty:
+        for _, row in df_avgs.iterrows():
+            key = (row['學年度'], row['學期'], row['課號'])
+            avg_lookup[key] = row['avg_score']
+
+    # 填入平均分
+    for c_id, data in matrix_data.items():
+        key = (data['academic_year'], data['semester'], data['course_code'])
+        if key in avg_lookup:
+            data['course_score_AVG'] = avg_lookup[key]
+
+    # 7. 寫入資料庫
+    print("正在寫入資料庫 Course_Matrix ...")
     
-    insert_sql = """
-        INSERT INTO Course_Matrix (
-            course_id, academic_year, semester, course_code, course_name,
-            has_K1, has_K2, has_K3, has_K4, has_K5,
-            PEO_Theory, PEO_Tech, PEO_Team, PEO_Innov, PEO_Global
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """
+    # 準備欄位順序 (排除 matrix_id，因為它是自動編號)
+    columns = [
+        col_map['course_id'], col_map['academic_year'], col_map['semester'], 
+        col_map['course_code'], col_map['course_name'], col_map['course_score_AVG'],
+        col_map['K1'], col_map['K2'], col_map['K3'], col_map['K4'], col_map['K5'],
+        col_map['PEO_Theory'], col_map['PEO_Tech'], col_map['PEO_Team'], 
+        col_map['PEO_Innov'], col_map['PEO_Global']
+    ]
     
-    conn.autocommit = False # 開啟交易模式加速寫入
+    # 加上 [] 保護欄位名稱
+    safe_columns = [f"[{c}]" for c in columns]
+    placeholders = ",".join(["?"] * len(columns))
+    insert_sql = f"INSERT INTO Course_Matrix ({','.join(safe_columns)}) VALUES ({placeholders})"
+    
+    conn.autocommit = False
     count = 0
     
-    for c_id, data in matrix_data.items():
-        # A. 收集該課程具備的 K 列表 (例如 [1, 3])
-        my_k_list = []
-        for k in range(1, 6):
-            if data[f'has_K{k}']:
-                my_k_list.append(k)
+    try:
+        for c_id, data in matrix_data.items():
+            # K 列表
+            my_k_list = [k for k in range(1, 6) if data[k]]
+            
+            # PEO 判定 (交集)
+            peo_results = {}
+            for peo_key, req_k in peo_rules.items():
+                peo_results[peo_key] = bool(set(my_k_list) & set(req_k))
+            
+            # 參數準備 (確保順序與 columns 一致)
+            params = (
+                data['course_id'], data['academic_year'], data['semester'], 
+                data['course_code'], data['course_name'], data['course_score_AVG'],
+                data[1], data[2], data[3], data[4], data[5],
+                peo_results['PEO_Theory'], peo_results['PEO_Tech'], 
+                peo_results['PEO_Team'], peo_results['PEO_Innov'], 
+                peo_results['PEO_Global']
+            )
+            
+            cursor.execute(insert_sql, params)
+            count += 1
+            
+        conn.commit()
+        print("-" * 30)
+        print(f"成功更新 {count} 筆資料 (含平均分數、能力指標、教育目標)。")
         
-        # B. 判定 PEO (交集邏輯：只要有任一項符合)
-        # set(my_k_list) & set(rule_list) 會取出交集，如果有值轉 bool 就是 True
-        is_theory = bool(set(my_k_list) & set(peo_rules['PEO_Theory']))
-        is_tech   = bool(set(my_k_list) & set(peo_rules['PEO_Tech']))
-        is_team   = bool(set(my_k_list) & set(peo_rules['PEO_Team']))
-        is_innov  = bool(set(my_k_list) & set(peo_rules['PEO_Innov']))
-        is_global = bool(set(my_k_list) & set(peo_rules['PEO_Global']))
-        
-        # C. 執行寫入
-        cursor.execute(insert_sql, (
-            data['course_id'], data['academic_year'], data['semester'], 
-            data['course_code'], data['course_name'],
-            data['has_K1'], data['has_K2'], data['has_K3'], 
-            data['has_K4'], data['has_K5'],
-            is_theory, is_tech, is_team, is_innov, is_global
-        ))
-        count += 1
-        
-    conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"寫入過程發生錯誤: {e}")
+        # 進階除錯資訊
+        import traceback
+        traceback.print_exc()
+    
     conn.close()
-    print("-" * 30)
-    print(f"矩陣表 (Course_Matrix) 建置完成！共處理 {count} 門課程。")
-    print("欄位說明：")
-    print("PEO_Theory : 學識理論")
-    print("PEO_Tech   : 專業技術")
-    print("PEO_Team   : 團隊合作與工程倫理")
-    print("PEO_Innov  : 獨立思考與創新")
-    print("PEO_Global : 國際視野")
 
 if __name__ == "__main__":
-    build_matrix()
+    if os.path.exists(db_path):
+        build_matrix()
+    else:
+        print(f"找不到資料庫: {db_path}")
