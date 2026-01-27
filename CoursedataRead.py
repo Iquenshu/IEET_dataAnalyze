@@ -5,18 +5,18 @@ import numpy as np
 
 # 課程資料匯入程式（含課程分類、SDGs、核心能力）
 # ==========================================
-# 1. 檔案設定 (請再次確認您的路徑)
+# 1. 檔案設定 (已更新為您指定的新分類表)
 # ==========================================
 db_path = 'IEETdatabase.accdb'
 
-# 分類表 (Excel檔)
-class_file = r'input_files\課程分類表\課程分類表1150119.xlsx'
+# 分類表 (使用您手動修正後的版本)
+class_file = r'input_files\課程分類表\課程分類表1150127.xlsx'
 
-# 原始課程資料 (Excel檔)
+# 原始課程資料 (維持不變)
 raw_file = r'input_files\開課課程資料\電機系109-113學年度開課課程資料(工程認證用)匯入.xlsx'
 
 # ==========================================
-# 2. 工具函式
+# 2. 工具函式 (完全保留原有邏輯)
 # ==========================================
 def get_db_connection():
     full_db_path = os.path.abspath(db_path)
@@ -57,32 +57,36 @@ def clean_smc(val):
         return False
 
 # ==========================================
-# 3. 主匯入邏輯 (完全針對您的資料庫結構修正)
+# 3. 主匯入邏輯 (僅修正課程分類部分)
 # ==========================================
 def import_data():
     conn = None
     try:
-        # --- A. 讀取並整理分類表 ---
+        # --- A. 讀取並整理分類表 (修正邏輯：區分數學與科學) ---
         df_class = read_file_robust(class_file)
         df_class.columns = [c.strip() for c in df_class.columns]
         
-        # 自動對應欄位
+        # 自動對應欄位 (新增 science 偵測)
         col_name = next((c for c in df_class.columns if '課程名稱' in c or 'course_name' in c), None)
-        col_math = next((c for c in df_class.columns if '數學' in c or 'math' in c), None)
+        col_math = next((c for c in df_class.columns if '數學' in c or 'is_math' in c), None)
+        col_science = next((c for c in df_class.columns if '科學' in c or 'science' in c), None) # 新增
         col_eng = next((c for c in df_class.columns if '工程' in c or 'eng' in c), None)
         col_gen = next((c for c in df_class.columns if '通識' in c or 'general' in c), None)
 
-        if not all([col_name, col_math, col_eng, col_gen]):
-            print("錯誤：分類表欄位無法辨識。")
+        # 簡單檢查關鍵欄位
+        if not col_name:
+            print("錯誤：分類表中找不到 '課程名稱' 欄位。")
             return
 
         class_map = {}
         for _, row in df_class.iterrows():
             c_name = str(row[col_name]).strip()
+            # 讀取四個分類標籤
             class_map[c_name] = {
-                'math': clean_boolean(row[col_math]),
-                'eng': clean_boolean(row[col_eng]),
-                'gen': clean_boolean(row[col_gen])
+                'math': clean_boolean(row.get(col_math, 0)),
+                'science': clean_boolean(row.get(col_science, 0)), # 新增
+                'eng': clean_boolean(row.get(col_eng, 0)),
+                'gen': clean_boolean(row.get(col_gen, 0))
             }
         print(f"分類表載入完成 ({len(class_map)} 筆)。")
 
@@ -103,7 +107,7 @@ def import_data():
         count_update = 0
         
         for keys, group in grouped:
-            # 確保型別正確，避免 param error
+            # 確保型別正確
             year = int(keys[0])
             sem = int(keys[1])
             dept_code = str(keys[2])
@@ -113,10 +117,10 @@ def import_data():
             course_name = str(first_row['課程名稱']).strip()
             credits_val = float(first_row['學分數']) if pd.notna(first_row['學分數']) else 0.0
             
-            # 取得分類
-            cls = class_map.get(course_name, {'math': False, 'eng': False, 'gen': False})
+            # 取得分類 (預設全 False)
+            cls = class_map.get(course_name, {'math': False, 'science': False, 'eng': False, 'gen': False})
             
-            # 1. 檢查課程是否存在 (使用 [] 避免關鍵字錯誤)
+            # 1. 檢查課程是否存在
             cursor.execute("""
                 SELECT [id] FROM [Courses] 
                 WHERE [academic_year]=? AND [semester]=? AND [dept_code]=? AND [course_code]=?
@@ -125,37 +129,36 @@ def import_data():
             row_exist = cursor.fetchone()
             
             if row_exist:
-                # --- 更新模式 ---
+                # --- 更新模式 (使用新的 is_math, is_science 欄位) ---
                 course_id = row_exist[0]
                 cursor.execute("""
                     UPDATE [Courses] 
-                    SET [is_math_science]=?, [is_eng_prof]=?, [is_general]=? 
+                    SET [is_math]=?, [is_science]=?, [is_eng_prof]=?, [is_general]=? 
                     WHERE [id]=?
-                """, (cls['math'], cls['eng'], cls['gen'], course_id))
+                """, (cls['math'], cls['science'], cls['eng'], cls['gen'], course_id))
                 
                 # 刪除舊的子表資料 (以便重新插入)
                 cursor.execute("DELETE FROM [Course_SDGs] WHERE [course_id]=?", (course_id,))
                 cursor.execute("DELETE FROM [Course_Competencies] WHERE [course_id]=?", (course_id,))
                 count_update += 1
             else:
-                # --- 新增模式 ---
+                # --- 新增模式 (使用新的 is_math, is_science 欄位) ---
                 cursor.execute("""
                     INSERT INTO [Courses] (
                         [academic_year], [semester], [dept_code], [course_code], 
                         [dept_name], [course_name], [is_required], [credits], [instructor],
-                        [is_math_science], [is_eng_prof], [is_general]
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        [is_math], [is_science], [is_eng_prof], [is_general]
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     year, sem, dept_code, course_code,
                     first_row['開課單位'], course_name, first_row['必選修'], credits_val, first_row['授課教師'],
-                    cls['math'], cls['eng'], cls['gen']
+                    cls['math'], cls['science'], cls['eng'], cls['gen']
                 ))
                 cursor.execute("SELECT @@IDENTITY")
                 course_id = cursor.fetchone()[0]
                 count_new += 1
 
-            # 2. 處理 SDGs (水平寫入：一門課一筆資料，含17個欄位)
-            # 收集 17 個 SDG 的布林值
+            # 2. 處理 SDGs (保留原有邏輯)
             sdg_values = []
             has_any_sdg = False
             for i in range(1, 18):
@@ -164,8 +167,6 @@ def import_data():
                 if val: has_any_sdg = True
                 sdg_values.append(val)
             
-            # 只有當至少有一個 SDG 被勾選時才寫入 (或者是您希望全0也要寫入？這裡假設全0不寫省空間)
-            # 如果希望就算全0也要寫，請移除 if has_any_sdg: 檢查
             if has_any_sdg:
                 sql_sdg = """
                     INSERT INTO [Course_SDGs] (
@@ -177,22 +178,19 @@ def import_data():
                 """
                 cursor.execute(sql_sdg, [course_id] + sdg_values)
 
-            # 3. 處理 Core Competencies (垂直寫入：每行一筆能力，但 SMC 欄位是水平的)
+            # 3. 處理 Core Competencies (保留原有邏輯)
             for _, row in group.iterrows():
                 comp_desc = str(row.get('核心能力', '')).strip()
                 if not comp_desc or comp_desc.lower() == 'nan':
                     continue
                 
-                # 判斷能力類型
                 cap_type = 'General' if ('通識' in comp_desc or '全校' in comp_desc) else 'EE'
                 
-                # 讀取 SMC_0 ~ SMC_10
                 smc_values = []
                 for k in range(11):
                     val = clean_smc(row.get(f'SMC_{k}', 0))
                     smc_values.append(val)
                 
-                # 寫入子表 (使用正確的 smc_0, smc_1... 欄位名稱)
                 sql_comp = """
                     INSERT INTO [Course_Competencies] (
                         [course_id], [capability_type], [competency_desc],
@@ -207,11 +205,10 @@ def import_data():
         print(f"作業完成！")
         print(f"新增課程數: {count_new}")
         print(f"更新課程數: {count_update}")
-        print("資料庫已同步至最新狀態。")
+        print("資料庫已同步至最新狀態 (數學與基礎科學已區分)。")
 
     except Exception as e:
         print(f"發生錯誤: {e}")
-        # 印出錯誤詳情以便除錯
         import traceback
         traceback.print_exc()
         if conn: conn.rollback()
