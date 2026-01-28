@@ -48,9 +48,22 @@ db_col_map = {
     'K5': 'has_SO_K5'
 }
 
-print("正在讀取 Course_Matrix 資料表...")
-sql = "SELECT * FROM Course_Matrix WHERE course_score_AVG IS NOT NULL"
-df_matrix = pd.read_sql(sql, db.conn)
+print("正在讀取並連結資料庫 (Course_Matrix + Courses)...")
+
+# [關鍵修正] 使用 JOIN 取得 dept_code
+sql = """
+SELECT 
+    M.*, 
+    C.dept_code 
+FROM Course_Matrix AS M
+INNER JOIN Courses AS C ON M.course_id = C.id
+WHERE M.course_score_AVG IS NOT NULL
+"""
+df_matrix_all = pd.read_sql(sql, db.conn)
+
+# 清理 dept_code 資料 (去除空白)
+if not df_matrix_all.empty:
+    df_matrix_all['dept_code'] = df_matrix_all['dept_code'].astype(str).str.strip()
 
 # ==========================================
 # 2. Excel 寫入核心邏輯
@@ -62,10 +75,7 @@ def write_semester_sheet(ws, df_sem, sem_label):
     """
     stats_result = {}
     
-    # ---------------------------------------------------------
-    # Part 1: 核心能力 (K1-K5)
-    # ---------------------------------------------------------
-    
+    # --- Part 1: 核心能力 (K1-K5) ---
     headers = ['核心能力', '對應課程與平均分數', '核心能力評量結果 (平均)']
     for col_idx, header in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col_idx, value=header)
@@ -120,10 +130,7 @@ def write_semester_sheet(ws, df_sem, sem_label):
         
         current_row += 1
 
-    # ---------------------------------------------------------
-    # Part 2: 教育目標 (PEOs)
-    # ---------------------------------------------------------
-    
+    # --- Part 2: 教育目標 (PEOs) ---
     current_row += 1
     ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=3)
     title_cell = ws.cell(row=current_row, column=1, value="【教育目標達成度分析】")
@@ -176,12 +183,9 @@ def write_trend_sheet(ws, trend_data):
     if not trend_data:
         return
 
-    # ==========================================
-    # 表格 1: 核心能力評量結果 (K1-K5)
-    # ==========================================
+    # --- 表格 1: 核心能力 ---
     current_row = 1
     
-    # 標題
     ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=6)
     title_k = ws.cell(row=current_row, column=1, value="【歷學期核心能力評量結果趨勢】")
     title_k.font = Font(bold=True, size=14)
@@ -189,8 +193,6 @@ def write_trend_sheet(ws, trend_data):
     title_k.fill = PatternFill(start_color="FCE4D6", end_color="FCE4D6", fill_type="solid")
     
     current_row += 1
-    
-    # 欄位：學年學期 + 完整的 K1~K5 描述
     headers_k = ['學年學期'] + [f"{k} {desc}" for k, desc in core_competencies.items()]
     
     for col_idx, header in enumerate(headers_k, 1):
@@ -199,35 +201,26 @@ def write_trend_sheet(ws, trend_data):
         cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
         cell.fill = PatternFill(start_color="DDDDDD", end_color="DDDDDD", fill_type="solid")
         
-        # 設定欄寬
         if col_idx == 1:
             ws.column_dimensions[chr(64+col_idx)].width = 15
         else:
-            ws.column_dimensions[chr(64+col_idx)].width = 30 # 加寬以容納描述
+            ws.column_dimensions[chr(64+col_idx)].width = 30
             
     current_row += 1
     
-    # 填寫資料
     for row_data in trend_data:
-        # 學期
         cell = ws.cell(row=current_row, column=1, value=row_data.get('Semester'))
         cell.alignment = Alignment(horizontal='center', vertical='center')
-        
-        # K1-K5 數值
         for i, key in enumerate(core_competencies.keys(), 2):
             val = row_data.get(key, 0.0)
             cell = ws.cell(row=current_row, column=i, value=val)
             cell.alignment = Alignment(horizontal='center', vertical='center')
             cell.number_format = '0.00'
-            
         current_row += 1
 
-    # ==========================================
-    # 表格 2: 教育目標達成度 (PEOs)
-    # ==========================================
-    current_row += 2 # 空兩行區隔
+    # --- 表格 2: 教育目標 ---
+    current_row += 2
     
-    # 標題
     ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=6)
     title_peo = ws.cell(row=current_row, column=1, value="【歷學期教育目標達成度趨勢】")
     title_peo.font = Font(bold=True, size=14)
@@ -235,8 +228,6 @@ def write_trend_sheet(ws, trend_data):
     title_peo.fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
     
     current_row += 1
-    
-    # 欄位：學年學期 + PEO名稱
     headers_peo = ['學年學期'] + list(peo_definitions.keys())
     
     for col_idx, header in enumerate(headers_peo, 1):
@@ -244,38 +235,37 @@ def write_trend_sheet(ws, trend_data):
         cell.font = Font(bold=True)
         cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
         cell.fill = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid")
-        # 欄寬已在上一個迴圈設定過，這裡沿用
         
     current_row += 1
     
-    # 填寫資料
     for row_data in trend_data:
-        # 學期
         cell = ws.cell(row=current_row, column=1, value=row_data.get('Semester'))
         cell.alignment = Alignment(horizontal='center', vertical='center')
-        
-        # PEO 數值
         for i, key in enumerate(peo_definitions.keys(), 2):
             val = row_data.get(key, 0.0)
             cell = ws.cell(row=current_row, column=i, value=val)
             cell.alignment = Alignment(horizontal='center', vertical='center')
             cell.number_format = '0.00'
-            
         current_row += 1
 
 # ==========================================
-# 3. 主程式
+# 3. 匯出封裝函式
 # ==========================================
-output_filename = f'核心能力與教育目標達成度分析_{today_str}.xlsx'
-full_output_path = os.path.join(OUTPUT_DIR_PATH, output_filename)
-
-print(f"準備寫入檔案: {full_output_path}")
-
-with pd.ExcelWriter(full_output_path, engine='openpyxl') as writer:
+def export_data(df, filename_prefix):
+    output_filename = f'{filename_prefix}_核心能力與教育目標達成度分析_{today_str}.xlsx'
+    full_output_path = os.path.join(OUTPUT_DIR_PATH, output_filename)
     
-    if not df_matrix.empty:
-        df_matrix['sort_key'] = df_matrix['academic_year'] * 10 + df_matrix['semester']
-        unique_sems = df_matrix[['academic_year', 'semester', 'sort_key']].drop_duplicates().sort_values('sort_key')
+    if df.empty:
+        print(f"警告：{filename_prefix} 沒有資料，略過匯出。")
+        return
+
+    print(f"準備寫入檔案: {full_output_path}")
+
+    with pd.ExcelWriter(full_output_path, engine='openpyxl') as writer:
+        
+        # 排序與迭代
+        df['sort_key'] = df['academic_year'] * 10 + df['semester']
+        unique_sems = df[['academic_year', 'semester', 'sort_key']].drop_duplicates().sort_values('sort_key')
         
         trend_records = [] 
         
@@ -288,29 +278,45 @@ with pd.ExcelWriter(full_output_path, engine='openpyxl') as writer:
                 continue
             
             sheet_name = f"{year}-{sem}"
-            print(f"處理分頁: {sheet_name}")
             
-            df_current_sem = df_matrix[
-                (df_matrix['academic_year'] == year) & 
-                (df_matrix['semester'] == sem)
+            # 篩選學期資料
+            df_current_sem = df[
+                (df['academic_year'] == year) & 
+                (df['semester'] == sem)
             ]
             
+            # 建立學期分頁
             ws = writer.book.create_sheet(sheet_name)
             stats = write_semester_sheet(ws, df_current_sem, sheet_name)
             
             stats['Semester'] = sheet_name
             trend_records.append(stats)
             
+        # 建立趨勢分頁
         if trend_records:
             ws_trend = writer.book.create_sheet("歷學期趨勢分析", 0)
             write_trend_sheet(ws_trend, trend_records)
             
         if 'Sheet' in writer.book.sheetnames:
             writer.book.remove(writer.book['Sheet'])
-            
-    else:
-        print("警告：資料庫中沒有課程矩陣資料，無法產生報表。")
+
+# ==========================================
+# 4. 主程式執行
+# ==========================================
+if not df_matrix_all.empty:
+    # 大學部 (B301)
+    print("--- 正在處理大學部資料 ---")
+    df_undergrad = df_matrix_all[df_matrix_all['dept_code'] == 'B301'].copy()
+    export_data(df_undergrad, "大學部")
+    
+    # 碩士班 (M301)
+    print("--- 正在處理碩士班資料 ---")
+    df_grad = df_matrix_all[df_matrix_all['dept_code'] == 'M301'].copy()
+    export_data(df_grad, "碩士班")
+
+else:
+    print("錯誤：資料庫中沒有有效的課程矩陣資料。")
 
 db.close()
 print("-" * 30)
-print(f"執行完成！請檢查: {OUTPUT_DIR_PATH}")
+print(f"全部完成！請檢查資料夾: {OUTPUT_DIR_PATH}")
