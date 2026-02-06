@@ -7,7 +7,7 @@ import time
 # 1. 設定檔案與資料表
 # ==========================================
 db_path = 'IEETdatabase.accdb'
-data_path = r'input_files\學生成績\電機系109-113學年度大學部及碩士班博士班學生所有成績.xlsx'
+data_path = r'input_files\學生成績\電機系100-108學年度大學部及碩士班博士班學生所有成績.xlsx'
 table_name = 'STscore'
 BATCH_SIZE = 1000  # 設定每 1000 筆寫入一次並顯示進度
 
