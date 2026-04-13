@@ -63,6 +63,7 @@ def filter_capstone_courses(df):
     篩選「專題」且「必修」的課程
     1. course_name 包含 '專題'
     2. is_required 為 True (1)
+    3. 特例：包含「電機工程進階實作專案」 (選修)
     """
     # 確保字串欄位
     df['course_name'] = df['course_name'].astype(str)
@@ -74,7 +75,11 @@ def filter_capstone_courses(df):
     # 轉布林值比較保險
     mask_req = df['is_required'].apply(lambda x: bool(x) if pd.notnull(x) else False)
     
-    return df[mask_name & mask_req].copy()
+    # 條件 3: 特例抓取「電機工程進階實作專案」 (即使它是選修也會被納入)
+    mask_special = df['course_name'] == '電機工程進階實作專案'
+    
+    # 回傳 (必修專題) OR (進階實作專案) 的結果
+    return df[(mask_name & mask_req) | mask_special].copy()
 
 def calculate_k_avg(df_filtered):
     """
@@ -239,7 +244,7 @@ def write_trend_sheet(ws, trend_data):
 def process_and_export(df_all, dept_name):
     print(f"\n--- 正在處理 {dept_name} 資料 ---")
     
-    # 1. 篩選專題且必修
+    # 1. 篩選專題且必修 (已包含進階實作專案特例)
     df_capstone = filter_capstone_courses(df_all)
     
     if df_capstone.empty:
@@ -299,6 +304,12 @@ if not df_matrix_all.empty:
     # 碩士班 (M301)
     df_grad = df_matrix_all[df_matrix_all['dept_code'] == 'M301'].copy()
     process_and_export(df_grad, "碩士班")
+
+    # --- [新增] 單獨輸出「電機工程進階實作專案」之分析檔案 ---
+    # 這裡直接從原始資料抓取該門課，並套用相同的分析流程輸出獨立 Excel
+    df_special_target = df_matrix_all[df_matrix_all['course_name'] == '電機工程進階實作專案'].copy()
+    if not df_special_target.empty:
+        process_and_export(df_special_target, "電機工程進階實作專案")
 else:
     print("錯誤：資料庫中沒有課程矩陣資料。")
 

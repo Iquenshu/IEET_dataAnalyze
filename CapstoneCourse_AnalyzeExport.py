@@ -73,10 +73,13 @@ def get_capstone_courses():
     # 課名篩選
     mask_name = df['course_name'].astype(str).str.contains('專題', na=False)
     
-    # 綜合篩選 (必修 + 專題)
-    df_capstone = df[mask_name & df['is_required_bool']].copy()
+    # [新增] 篩選特例：電機工程進階實作專案 (選修)
+    mask_special = df['course_name'] == '電機工程進階實作專案'
     
-    print(f"共篩選出 {len(df_capstone)} 門必修專題課程。")
+    # 綜合篩選 ( (必修 + 專題) OR 電機工程進階實作專案 )
+    df_capstone = df[(mask_name & df['is_required_bool']) | mask_special].copy()
+    
+    print(f"共篩選出 {len(df_capstone)} 門必修專題與特例課程。")
     return df_capstone
 
 def get_assessment_methods_formatted():
@@ -294,17 +297,9 @@ def export_to_excel(df_all, filename_prefix):
                                          top=Side(style='thin'), bottom=Side(style='thin'))
                     
                     # 對於評量方式欄位 (靠左對齊比較好看)
-                    # 評量方式是第 10 欄 (J)
-                    if c_idx == 14: # (8 base + 5 K + 1 count + 1 assess) -> 15th column index?
-                        # Let's count:
-                        # 1:課號, 2:課名, 3:老師, 4:學年, 5:學期, 6:學分, 7:必選, 8:類型
-                        # 9~13: K1~K5
-                        # 14: 人數
-                        # 15: 評量方式
-                        # 16: 平均
-                        # 17: 及格率
-                        if c_idx == 15:
-                            cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
+                    # 評量方式是第 15 欄 (O)
+                    if c_idx == 15:
+                        cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=True)
 
                     if r_idx == 1:
                         cell.font = Font(bold=True, color="FFFFFF")
@@ -344,13 +339,18 @@ try:
     if not df_full.empty:
         df_full = df_full.sort_values(by=['學年', '開課學期', '課號'])
         
-        # 分流
+        # 1. 分流 (大學部/碩士班)
         df_u = df_full[df_full['dept_code'] == 'B301'].copy()
         export_to_excel(df_u, "大學部")
         
         df_g = df_full[df_full['dept_code'] == 'M301'].copy()
         export_to_excel(df_g, "碩士班")
         
+        # 2. [新增] 單獨輸出「電機工程進階實作專案」之分析檔案
+        df_special_target = df_full[df_full['課程名稱'] == '電機工程進階實作專案'].copy()
+        if not df_special_target.empty:
+            export_to_excel(df_special_target, "電機工程進階實作專案")
+
         print("-" * 30)
         print(f"全部完成！請檢查: {OUTPUT_DIR_PATH}")
     else:
