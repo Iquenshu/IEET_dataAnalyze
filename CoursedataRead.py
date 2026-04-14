@@ -10,10 +10,10 @@ import numpy as np
 db_path = 'IEETdatabase.accdb'
 
 # 分類表 (使用您手動修正後的版本)
-class_file = r'input_files\課程分類表\課程分類表1150127.xlsx'
+class_file = r'input_files\課程分類表\課程分類表_已修正_20260413.xlsx'
 
 # 原始課程資料 (維持不變)
-raw_file = r'input_files\開課課程資料\電機系109-113學年度開課課程資料(工程認證用)匯入.xlsx'
+raw_file = r'input_files\開課課程資料\電機系1141學年度開課課程資料(工程認證用).xlsx'
 
 # ==========================================
 # 2. 工具函式 (完全保留原有邏輯)
