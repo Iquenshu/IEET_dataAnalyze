@@ -13,7 +13,7 @@ today_str = datetime.today().strftime('%Y%m%d')
 
 # [設定] 檔案輸出路徑
 BASE_DIR = 'output_files'
-SUB_DIR = '雇主問券分析'
+SUB_DIR = '雇主問卷分析'
 OUTPUT_DIR_PATH = os.path.join(BASE_DIR, SUB_DIR)
 
 # 自動建立資料夾
@@ -135,7 +135,7 @@ df_trend = pd.DataFrame(yearly_stats)
 # ==========================================
 # 3. Excel 輸出
 # ==========================================
-output_filename = f'雇主問券核心能力分析_{today_str}.xlsx'
+output_filename = f'雇主問卷核心能力分析_{today_str}.xlsx'
 full_path = os.path.join(OUTPUT_DIR_PATH, output_filename)
 print(f"正在輸出: {full_path}")
 

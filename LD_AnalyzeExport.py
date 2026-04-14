@@ -12,7 +12,7 @@ today_str = datetime.today().strftime('%Y%m%d')
 
 # [設定] 檔案輸出路徑
 BASE_DIR = 'output_files'
-SUB_DIR = '離系問券統計'
+SUB_DIR = '離系問卷統計'
 OUTPUT_DIR_PATH = os.path.join(BASE_DIR, SUB_DIR)
 
 # 自動建立資料夾
@@ -261,10 +261,10 @@ def export_excel(df, big_map, small_map, filename, sheet_suffix):
 print(f"輸出目標資料夾: {OUTPUT_DIR_PATH}")
 
 print("正在匯出大學部資料...")
-export_excel(df_u, big_map_u, small_map_u, f'大學部離系問券統計_{today_str}.xlsx', '大學部')
+export_excel(df_u, big_map_u, small_map_u, f'大學部離系問卷統計_{today_str}.xlsx', '大學部')
 
 print("正在匯出研究所資料...")
-export_excel(df_g, big_map_g, small_map_g, f'研究所離系問券統計_{today_str}.xlsx', '研究所')
+export_excel(df_g, big_map_g, small_map_g, f'研究所離系問卷統計_{today_str}.xlsx', '研究所')
 
 db.close()
 print("-" * 30)
