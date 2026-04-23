@@ -96,24 +96,33 @@ def write_semester_sheet(ws, df_sem, sem_label):
         # 收集課程與分數
         total_score = 0
         count = 0
-        course_items = []
+        
+        # --- [修正] 使用字典將同名課程分數放一起 ---
+        course_name_map = {} # 格式: { "課程名稱": [分數1, 分數2, ...] }
         
         df_k = df_k.sort_values('course_code')
         
         for _, row in df_k.iterrows():
             c_name = str(row['course_name']).strip()
-            c_code = str(row['course_code']).strip()
+            # c_code = str(row['course_code']).strip() # 若需要課號可取消註解
             
             if pd.notnull(row['course_score_AVG']):
                 score = float(row['course_score_AVG'])
                 
-                # --- [修正] 暫時拿掉課號，僅保留課名與分數 ---
-                # 如果日後需要加回課號，請改回下一行註解掉的程式碼，並將現行程式碼註解
-                # course_items.append(f"{c_name} {c_code}[{score:.1f}]") # 包含課號格式
-                course_items.append(f"{c_name}[{score:.1f}]")           # 僅課名+分數格式
+                # 將分數加入對應課程名稱的清單中
+                if c_name not in course_name_map:
+                    course_name_map[c_name] = []
+                course_name_map[c_name].append(f"{score:.1f}")
                 
                 total_score += score
                 count += 1
+        
+        # 將字典資料格式化為 "課名[分數1, 分數2]" 字串清單
+        course_items = []
+        for name, scores in course_name_map.items():
+            # 將多個分數用逗號隔開放入中括號
+            scores_str = ",".join(scores)
+            course_items.append(f"{name}[{scores_str}]")
         
         course_list_str = ", ".join(course_items)
         
