@@ -106,7 +106,12 @@ def write_semester_sheet(ws, df_sem, sem_label):
             
             if pd.notnull(row['course_score_AVG']):
                 score = float(row['course_score_AVG'])
-                course_items.append(f"{c_name} {c_code}[{score:.1f}]")
+                
+                # --- [修正] 暫時拿掉課號，僅保留課名與分數 ---
+                # 如果日後需要加回課號，請改回下一行註解掉的程式碼，並將現行程式碼註解
+                # course_items.append(f"{c_name} {c_code}[{score:.1f}]") # 包含課號格式
+                course_items.append(f"{c_name}[{score:.1f}]")           # 僅課名+分數格式
+                
                 total_score += score
                 count += 1
         

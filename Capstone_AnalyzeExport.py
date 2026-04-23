@@ -127,7 +127,11 @@ def get_course_list_str(df_filtered, k_key):
         c_name = str(row['course_name']).strip()
         c_code = str(row['course_code']).strip()
         score = float(row['course_score_AVG'])
-        items.append(f"{c_name} {c_code}[{score:.1f}]")
+        
+        # --- [修正] 暫時拿掉課號，僅保留課名與分數 ---
+        # 如果日後需要加回課號，請使用下一行註解掉的程式碼，並將現行程式碼註解
+        # items.append(f"{c_name} {c_code}[{score:.1f}]") # 包含課號的格式
+        items.append(f"{c_name}[{score:.1f}]")           # 僅課名+分數的格式
         
     return ", ".join(items)
 
