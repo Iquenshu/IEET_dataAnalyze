@@ -43,7 +43,7 @@ def find_col(df, keywords):
     return None
 
 def check_bool(val):
-    return str(val).strip().lower() in ['1', 'true', 'yes']
+    return str(val).strip().lower() in ['1', 'true', 'yes', 'v', '1.0']
 
 def get_course_code_column(df):
     candidates = ['course_code', '課號', 'code', 'c_code']
@@ -186,8 +186,21 @@ if not all_ids:
 # ==========================================
 # 5. 載入課程與成績
 # ==========================================
-print("讀取分類表與成績...")
-map_file = r'input_files\課程分類表\課程分類表_20260211.xlsx'
+print("從資料庫載入電機系開課分類資料表 (Courses)...")
+df_db_courses = pd.read_sql("SELECT * FROM Courses", db.conn)
+
+db_class_map = {}
+for _, row in df_db_courses.iterrows():
+    c_name = str(row['course_name']).strip()
+    db_class_map[c_name] = {
+        'math': bool(row['is_math']),
+        'sci': bool(row['is_science']),
+        'eng': bool(row['is_eng_prof']),
+        'gen': bool(row['is_general'])
+    }
+
+print("讀取外部備援分類表與成績...")
+map_file = r'input_files\課程分類表\課程分類表_20260520.xlsx'
 df_ext_map = pd.DataFrame()
 
 if os.path.exists(map_file):
@@ -216,7 +229,7 @@ df_scores = df_scores_raw[df_scores_raw[sc_id_col].isin(all_ids)].copy()
 missing_courses = set()
 
 # ==========================================
-# 6. 分析與匯出
+# 6. 分析與匯出邏輯調整
 # ==========================================
 
 def determine_start_grade(student_rec):
@@ -230,10 +243,15 @@ def determine_start_grade(student_rec):
                 except: pass
     return 1, 1 
 
-def get_course_category(c_name, df_map):
+def get_course_category(c_name, db_map, df_map):
+    c_name = str(c_name).strip()
+    
+    if c_name in db_map:
+        return db_map[c_name]
+        
     res = {'math': False, 'sci': False, 'eng': False, 'gen': False}
     if df_map.empty or pd.isna(c_name): return res
-    c_name = str(c_name).strip()
+    
     if c_name in df_map.index:
         info = df_map.loc[c_name]
         if isinstance(info, pd.DataFrame): info = info.iloc[0]
@@ -246,7 +264,7 @@ def get_course_category(c_name, df_map):
         res['gen'] = is_true('general') or is_true('通識')
     return res
 
-def process_student_data(s_rec, default_grade):
+def process_student_data(s_rec, default_grade, db_map, df_map):
     sid = s_rec['sid']
     rank_str = f"{s_rec['rank']}/{s_rec['total']} ({s_rec['group_label']})"
     
@@ -293,26 +311,30 @@ def process_student_data(s_rec, default_grade):
         if sem_key_tuple not in sem_data:
             sem_data[sem_key_tuple] = {'courses': [], 'stats': {'數學': 0, '基礎科學': 0, '工程專業': 0, '通識': 0, '總計': 0}}
         
-        cats = get_course_category(name, df_ext_map)
+        cats = get_course_category(name, db_map, df_map)
         
+        # 💡 【優化修正】將原 if-elif 改為多個獨立 if
+        # 如此一來，當某門課同時被歸類在多個分類時（如：數學=True 且 工程=True），兩個領域都會累加該科完整學分。
+        # 未來若要加入權重，只需在此處將「cred」修改為「cred * 權重變數」即可。
         if cats['math']: 
             sem_data[sem_key_tuple]['stats']['數學'] += cred
             total_stats['數學'] += cred
-        elif cats['sci']: 
+        if cats['sci']: 
             sem_data[sem_key_tuple]['stats']['基礎科學'] += cred
             total_stats['基礎科學'] += cred
-        elif cats['eng']: 
+        if cats['eng']: 
             sem_data[sem_key_tuple]['stats']['工程專業'] += cred
             total_stats['工程專業'] += cred
-        elif cats['gen']: 
+        if cats['gen']: 
             sem_data[sem_key_tuple]['stats']['通識'] += cred
             total_stats['通識'] += cred
             
+        # 實質畢業總學分累加（一門課對畢業總額只貢獻一次原始學分，不受複選影響）
         sem_data[sem_key_tuple]['stats']['總計'] += cred
         total_stats['總計'] += cred
         
-        if not any(cats.values()) and not df_ext_map.empty:
-             if str(name).strip() not in df_ext_map.index:
+        if not any(cats.values()):
+             if name not in db_map and (df_map.empty or str(name).strip() not in df_map.index):
                  missing_courses.add(f"{code} {name}")
         
         score_display = int(score_val) if score_val != -1 and score_val.is_integer() else raw_score
@@ -321,38 +343,15 @@ def process_student_data(s_rec, default_grade):
         
     return sem_data, total_stats, rank_str, sid
 
-# [新增] 格式化百分比
 def calc_pct(val, total):
     if total == 0: return "0%"
     return f"{val/total:.1%}"
 
-def format_stats(stats):
-    total = stats['總計']
-    items = []
-    
-    # 格式: 總計:25
-    items.append(f"總計:{int(total) if total.is_integer() else total}")
-    
-    # 格式: 數學:6 (24.0%)
-    def fmt_item(key):
-        val = stats[key]
-        val_str = int(val) if val.is_integer() else val
-        if val > 0:
-            return f"{key}:{val_str} ({calc_pct(val, total)})"
-        return None
-
-    for k in ['數學', '基礎科學', '工程專業', '通識']:
-        s = fmt_item(k)
-        if s: items.append(s)
-        
-    return "\n".join(items)
-
-def write_report(data, filename, default_grade):
+def write_report(data, filename, default_grade, db_map, df_map):
     full_path = os.path.join(OUTPUT_DIR_PATH, filename)
     print(f"寫入: {full_path}")
     
     is_undergrad = "大學部" in filename
-    # 設定最低畢業學分基數 (分母)
     MIN_GRAD_CREDITS = 132 if is_undergrad else 24 
     
     with pd.ExcelWriter(full_path, engine='openpyxl') as writer:
@@ -362,14 +361,12 @@ def write_report(data, filename, default_grade):
             
             cursor = 1
             for s_rec in data[year]:
-                sem_data, total_stats, rank_str, sid = process_student_data(s_rec, default_grade)
+                sem_data, total_stats, rank_str, sid = process_student_data(s_rec, default_grade, db_map, df_map)
                 
-                # 學員基本資訊
                 header = f"學號: {sid}  |  排名: {rank_str}  |  最低畢業學分基準: {MIN_GRAD_CREDITS}"
                 ws.cell(row=cursor, column=1, value=header).font = Font(bold=True, size=12)
                 cursor += 1
                 
-                # 獨立欄位表頭
                 headers = ["年級(學期)", "課程(課號、成績、學分)", "數學", "基礎科學", "工程專業", "通識", "學期總計"]
                 for i, h in enumerate(headers, 1):
                     cell = ws.cell(row=cursor, column=i, value=h)
@@ -393,12 +390,10 @@ def write_report(data, filename, default_grade):
                     courses_str = "、".join(info['courses'])
                     stats = info['stats']
                     
-                    # 專題實作檢查
                     for c_fmt in info['courses']:
                         if any(kw in c_fmt for kw in ['專題', '設計', '實作']):
                             has_capstone = True
 
-                    # 填寫每學期數據
                     ws.cell(row=cursor, column=1, value=display_sem).alignment = Alignment(horizontal='center')
                     ws.cell(row=cursor, column=2, value=courses_str).alignment = Alignment(wrap_text=True, vertical='center')
                     
@@ -414,7 +409,6 @@ def write_report(data, filename, default_grade):
                                                                      top=Side(style='thin'), bottom=Side(style='thin'))
                     cursor += 1
                 
-                # --- 總計學分行 ---
                 ws.cell(row=cursor, column=1, value="累積總學分").font = Font(bold=True)
                 ws.cell(row=cursor, column=1).fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
                 ws.cell(row=cursor, column=2).fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
@@ -433,13 +427,11 @@ def write_report(data, filename, default_grade):
                                                                  top=Side(style='thin'), bottom=Side(style='thin'))
                 cursor += 1
 
-                # --- IEET 檢查行 (基於 132 學分門檻) ---
                 if is_undergrad:
                     math_c = total_stats['數學']
                     sci_c = total_stats['基礎科學']
                     eng_c = total_stats['工程專業']
                     
-                    # 4.1.1 判定 (門檻 132)
                     is_411_ok = (math_c >= 9) and (sci_c >= 9) and ((math_c + sci_c) >= (MIN_GRAD_CREDITS * 0.25))
                     res_411 = "[符合]" if is_411_ok else "[不符合]"
                     detail_411 = f"{res_411} 4.1.1 數學及基礎科學 (各>=9且合計>=畢業基數{MIN_GRAD_CREDITS}之1/4)。 詳情: 數:{int(math_c)}, 理:{int(sci_c)}, 合計佔比:{calc_pct(math_c+sci_c, MIN_GRAD_CREDITS)}"
@@ -450,7 +442,6 @@ def write_report(data, filename, default_grade):
                     if not is_411_ok: cell_411.font = Font(color="FF0000", bold=True)
                     cursor += 1
                     
-                    # 4.1.2 判定 (門檻 132)
                     is_412_ok = (eng_c >= (MIN_GRAD_CREDITS * 0.375)) and has_capstone
                     res_412 = "[符合]" if is_412_ok else "[不符合]"
                     detail_412 = f"{res_412} 4.1.2 工程專業 (>=畢業基數{MIN_GRAD_CREDITS}之3/8 且含專題)。 詳情: 佔比:{calc_pct(eng_c, MIN_GRAD_CREDITS)}, 專題:{'有' if has_capstone else '無'}"
@@ -463,7 +454,6 @@ def write_report(data, filename, default_grade):
 
                 cursor += 2
             
-            # 設定寬度
             ws.column_dimensions['A'].width = 15
             ws.column_dimensions['B'].width = 85
             for col in ['C', 'D', 'E', 'F', 'G']:
@@ -471,9 +461,73 @@ def write_report(data, filename, default_grade):
             
         if 'Sheet' in writer.book.sheetnames: writer.book.remove(writer.book['Sheet'])
 
-write_report(u_data, f"大學部_畢業生成績分析_{today_str}.xlsx", 4)
-write_report(g_data, f"碩士班_畢業生成績分析_{today_str}.xlsx", 2)
+write_report(u_data, f"大學部_畢業生成績分析_{today_str}.xlsx", 4, db_class_map, df_ext_map)
+write_report(g_data, f"碩士班_畢業生成績分析_{today_str}.xlsx", 2, db_class_map, df_ext_map)
 
+
+# ==========================================
+# 7. 匯出電機系開設課程分類清冊功能
+# ==========================================
+def export_ee_course_matrix(df_courses, target_years, filename):
+    full_path = os.path.join(OUTPUT_DIR_PATH, filename)
+    print(f"正在建立與匯出電機系開課分類清冊: {full_path}")
+    
+    df_filtered = df_courses[df_courses['academic_year'].astype(str).isin(target_years)].copy()
+    df_filtered = df_filtered.sort_values(by=['academic_year', 'semester', 'course_code'])
+    
+    cols_mapping = {
+        'academic_year': '學年度',
+        'semester': '學期',
+        'course_code': '課號',
+        'course_name': '課程名稱',
+        'is_required': '必選修',
+        'credits': '學分',
+        'instructor': '授課教師',
+        'is_math': '數學',
+        'is_science': '基礎科學',
+        'is_eng_prof': '工程專業',
+        'is_general': '通識'
+    }
+    
+    df_export = df_filtered[list(cols_mapping.keys())].rename(columns=cols_mapping)
+    
+    # 🛠️ 【依照需求更正】將布林值 True/False 直接轉換為 1 與 0 數字
+    # 這保留了數值型態，方便您未來在 Excel 或 Python 裡進行權重係數乘法。
+    for cat in ['數學', '基礎科學', '工程專業', '通識']:
+        df_export[cat] = df_export[cat].apply(lambda x: 1 if x else 0)
+        
+    with pd.ExcelWriter(full_path, engine='openpyxl') as writer:
+        df_export.to_excel(writer, index=False, sheet_name='電機系開課分類矩陣')
+        ws = writer.sheets['電機系開課分類矩陣']
+        
+        header_fill = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid")
+        thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), 
+                             top=Side(style='thin'), bottom=Side(style='thin'))
+        
+        for cell in ws[1]:
+            cell.font = Font(bold=True)
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.border = thin_border
+            
+        for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=ws.max_column):
+            for cell in row:
+                cell.border = thin_border
+                if cell.column in [1, 2, 3, 5, 6, 8, 9, 10, 11]:
+                    cell.alignment = Alignment(horizontal='center')
+                    
+        for col in ws.columns:
+            max_len = max(len(str(cell.value or '')) for cell in col)
+            col_letter = col[0].column_letter
+            ws.column_dimensions[col_letter].width = max(max_len + 4, 11)
+
+target_years_list = [str(y) for y in range(109, 115)]
+export_ee_course_matrix(df_db_courses, target_years_list, f"電機系開課課程分類清冊_{today_str}.xlsx")
+
+
+# ==========================================
+# 8. 結束處理
+# ==========================================
 if missing_courses:
     with open(os.path.join(OUTPUT_DIR_PATH, "missing_courses.txt"), "w", encoding='utf-8') as f:
         f.write("\n".join(sorted(list(missing_courses))))
