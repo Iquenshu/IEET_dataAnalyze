@@ -104,7 +104,6 @@ def write_semester_sheet(ws, df_sem, sem_label):
         
         for _, row in df_k.iterrows():
             c_name = str(row['course_name']).strip()
-            # c_code = str(row['course_code']).strip() # 若需要課號可取消註解
             
             if pd.notnull(row['course_score_AVG']):
                 score = float(row['course_score_AVG'])
@@ -120,7 +119,6 @@ def write_semester_sheet(ws, df_sem, sem_label):
         # 將字典資料格式化為 "課名[分數1, 分數2]" 字串清單
         course_items = []
         for name, scores in course_name_map.items():
-            # 將多個分數用逗號隔開放入中括號
             scores_str = ",".join(scores)
             course_items.append(f"{name}[{scores_str}]")
         
@@ -263,6 +261,80 @@ def write_trend_sheet(ws, trend_data):
             cell.number_format = '0.00'
         current_row += 1
 
+
+def write_yearly_trend_sheet(ws, yearly_trend_data):
+    """
+    建立歷學年趨勢統計表 (拆分為兩個表格：核心能力 與 教育目標)
+    特別設計給使用者快速選取製作統計圖
+    """
+    if not yearly_trend_data:
+        return
+
+    # --- 表格 1: 核心能力 ---
+    current_row = 1
+    
+    ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=6)
+    title_k = ws.cell(row=current_row, column=1, value="【歷學年核心能力評量結果趨勢】")
+    title_k.font = Font(bold=True, size=14)
+    title_k.alignment = Alignment(horizontal='center')
+    title_k.fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid") # 使用淡黃色區隔
+    
+    current_row += 1
+    headers_k = ['學年度'] + [f"{k} {desc}" for k, desc in core_competencies.items()]
+    
+    for col_idx, header in enumerate(headers_k, 1):
+        cell = ws.cell(row=current_row, column=col_idx, value=header)
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        cell.fill = PatternFill(start_color="DDDDDD", end_color="DDDDDD", fill_type="solid")
+        
+        if col_idx == 1:
+            ws.column_dimensions[chr(64+col_idx)].width = 15
+        else:
+            ws.column_dimensions[chr(64+col_idx)].width = 30
+            
+    current_row += 1
+    
+    for row_data in yearly_trend_data:
+        cell = ws.cell(row=current_row, column=1, value=row_data.get('Year'))
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        for i, key in enumerate(core_competencies.keys(), 2):
+            val = row_data.get(key, 0.0)
+            cell = ws.cell(row=current_row, column=i, value=val)
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.number_format = '0.00'
+        current_row += 1
+
+    # --- 表格 2: 教育目標 ---
+    current_row += 2
+    
+    ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=6)
+    title_peo = ws.cell(row=current_row, column=1, value="【歷學年教育目標達成度趨勢】")
+    title_peo.font = Font(bold=True, size=14)
+    title_peo.alignment = Alignment(horizontal='center')
+    title_peo.fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+    
+    current_row += 1
+    headers_peo = ['學年度'] + list(peo_definitions.keys())
+    
+    for col_idx, header in enumerate(headers_peo, 1):
+        cell = ws.cell(row=current_row, column=col_idx, value=header)
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        cell.fill = PatternFill(start_color="DDEBF7", end_color="DDEBF7", fill_type="solid")
+        
+    current_row += 1
+    
+    for row_data in yearly_trend_data:
+        cell = ws.cell(row=current_row, column=1, value=row_data.get('Year'))
+        cell.alignment = Alignment(horizontal='center', vertical='center')
+        for i, key in enumerate(peo_definitions.keys(), 2):
+            val = row_data.get(key, 0.0)
+            cell = ws.cell(row=current_row, column=i, value=val)
+            cell.alignment = Alignment(horizontal='center', vertical='center')
+            cell.number_format = '0.00'
+        current_row += 1
+
 # ==========================================
 # 3. 匯出封裝函式
 # ==========================================
@@ -278,7 +350,7 @@ def export_data(df, filename_prefix):
 
     with pd.ExcelWriter(full_output_path, engine='openpyxl') as writer:
         
-        # 排序與迭代
+        # 排序與迭代 (學期)
         df['sort_key'] = df['academic_year'] * 10 + df['semester']
         unique_sems = df[['academic_year', 'semester', 'sort_key']].drop_duplicates().sort_values('sort_key')
         
@@ -306,11 +378,54 @@ def export_data(df, filename_prefix):
             
             stats['Semester'] = sheet_name
             trend_records.append(stats)
+
+        # --- 新增：計算「歷學年」趨勢資料 ---
+        yearly_trend_records = []
+        unique_years = sorted(df['academic_year'].dropna().unique())
+        
+        for year in unique_years:
+            year = int(year)
+            # 篩選該學年的資料 (同樣排除第3學期)
+            df_current_year = df[(df['academic_year'] == year) & (df['semester'] != 3)]
+            if df_current_year.empty:
+                continue
             
-        # 建立趨勢分頁
+            year_stats = {'Year': f"{year}學年度"}
+            k_scores = {}
+            
+            # 計算該學年 K1~K5 的總平均
+            for k_key in core_competencies.keys():
+                db_col = db_col_map[k_key]
+                df_k = df_current_year[df_current_year[db_col].apply(lambda x: bool(x) if pd.notnull(x) else False)]
+                
+                total_score = 0
+                count = 0
+                for _, r_row in df_k.iterrows():
+                    if pd.notnull(r_row['course_score_AVG']):
+                        total_score += float(r_row['course_score_AVG'])
+                        count += 1
+                
+                avg_result = round(total_score / count, 2) if count > 0 else 0.0
+                k_scores[k_key] = avg_result
+                year_stats[k_key] = avg_result
+            
+            # 計算該學年 PEO 的達成度
+            for peo_name, required_ks in peo_definitions.items():
+                current_k_values = [k_scores.get(k, 0.0) for k in required_ks]
+                peo_avg = round(sum(current_k_values) / len(current_k_values), 2) if current_k_values else 0.0
+                year_stats[peo_name] = peo_avg
+                
+            yearly_trend_records.append(year_stats)
+            
+        # 建立「歷學期趨勢分頁」
         if trend_records:
             ws_trend = writer.book.create_sheet("歷學期趨勢分析", 0)
             write_trend_sheet(ws_trend, trend_records)
+            
+        # 建立「歷學年趨勢分頁」 (將其插在 index 0，成為最前面的預設分頁，方便直接開啟產圖)
+        if yearly_trend_records:
+            ws_yearly_trend = writer.book.create_sheet("歷學年趨勢分析", 0)
+            write_yearly_trend_sheet(ws_yearly_trend, yearly_trend_records)
             
         if 'Sheet' in writer.book.sheetnames:
             writer.book.remove(writer.book['Sheet'])
