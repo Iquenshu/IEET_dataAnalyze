@@ -6,12 +6,12 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 import warnings
 
-# 忽略 Pandas 與 SQLAlchemy 的警告訊息
+# 忽略 Pandas 與 SQLAlchemy 的警告訊息，維護主機終端機輸出簡潔
 warnings.simplefilter(action='ignore', category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
 # ==========================================
-# 1. 設定與準備
+# 1. 設定與準備 (路徑與對照表)
 # ==========================================
 db = AccessHelper()
 today_str = datetime.today().strftime('%Y%m%d')
@@ -24,6 +24,7 @@ if not os.path.exists(OUTPUT_DIR_PATH):
     os.makedirs(OUTPUT_DIR_PATH)
     print(f"已建立資料夾: {OUTPUT_DIR_PATH}")
 
+# 核心能力 (K1~K5) 欄位與顯示文字對照表
 k_mapping = {
     'has_SO_K1': 'K1 能夠整合、組織電機專業理論來分析、表達問題之能力',
     'has_SO_K2': 'K2 能夠運用電機專業知識解決及實作電機工程問題之能力',
@@ -32,6 +33,7 @@ k_mapping = {
     'has_SO_K5': 'K5 具備吸收電機新知、掌握國際發展趨勢，隨時接受競爭挑戰之能力'
 }
 
+# SDGs (SDG1~SDG17) 欄位與顯示文字對照表
 sdg_mapping = {
     'sdg_1': 'SDG1 消除貧窮',
     'sdg_2': 'SDG2 消除飢餓',
@@ -56,10 +58,11 @@ k_cols = list(k_mapping.keys())
 sdg_cols = list(sdg_mapping.keys())
 
 # ==========================================
-# 2. 資料讀取
+# 2. 資料讀取 (從 Courses、Course_Matrix、Course_SDGs 整合)
 # ==========================================
 print("正在讀取並整合資料庫 (Courses + Matrix + SDGs)...")
 
+# 從 Courses 表讀取 C.is_required 欄位
 sql = '''
 SELECT 
     C.academic_year, C.semester, C.dept_code,
@@ -75,9 +78,14 @@ ORDER BY C.academic_year DESC, C.semester, C.course_code
 '''
 
 df_raw = pd.read_sql(sql, db.conn)
+# 排除第 3 學期 (暑修/特殊學期)
 df_raw = df_raw[df_raw['semester'] != 3]
 
+# ==========================================
+# 3. 資料格式轉換與清理工具函式
+# ==========================================
 def format_check_numeric(val):
+    """將勾選狀態格式化為數字 1 或 0"""
     if pd.isna(val): return 0
     try:
         if isinstance(val, (bool, int, float)):
@@ -88,14 +96,33 @@ def format_check_numeric(val):
     except: return 0
 
 def get_required_str(val):
-    try:
-        if isinstance(val, bool): return "必修" if val else "選修"
-        s_val = str(val).lower().strip()
-        if s_val in ['1', 'true', '1.0', 'yes']: return "必修"
+    """
+    【修正】解析 Courses 資料表中的 is_required 欄位
+    支援判斷：bool 值, 數字 1/0, 字串 '1'/'0', 中文 '必修'/'選修'/'必' 等型態
+    """
+    if pd.isna(val):
         return "選修"
-    except: return "選修"
+    try:
+        # 1. 布林值判斷
+        if isinstance(val, bool):
+            return "必修" if val else "選修"
+        
+        s_val = str(val).lower().strip()
+        
+        # 2. 涵蓋所有代表「必修」的常見格式 (包含中文)
+        if s_val in ['1', '1.0', 'true', 'yes', '必修', '必']:
+            return "必修"
+        
+        # 3. 特殊數字處理 (>0 均視為必修)
+        if s_val.isdigit() and int(s_val) > 0:
+            return "必修"
+            
+        return "選修"
+    except:
+        return "選修"
 
 def process_data_for_table(df_sem, target_cols, mapping_dict):
+    """轉換細節分頁的主表資料，並計算欄位小計"""
     output_rows = []
     display_labels = [mapping_dict[c] for c in target_cols]
     totals = {label: 0 for label in display_labels}
@@ -108,6 +135,7 @@ def process_data_for_table(df_sem, target_cols, mapping_dict):
             row_sum += val
             current_vals.append(val)
             
+        # 若該門課在目標指標中皆未勾選 (row_sum == 0)，則不填入細節表
         if row_sum == 0: continue
 
         excel_row = {
@@ -134,6 +162,7 @@ def process_data_for_table(df_sem, target_cols, mapping_dict):
     return df_out, totals, display_labels
 
 def get_missing_string(df_sem, check_cols):
+    """取得未關聯任何指標之課程清單字串"""
     missing_items = []
     for _, row in df_sem.iterrows():
         row_sum = 0
@@ -143,7 +172,11 @@ def get_missing_string(df_sem, check_cols):
             missing_items.append(f"{row['course_name']} ({row['course_code']})")
     return ", ".join(missing_items) if missing_items else "(無)"
 
+# ==========================================
+# 4. Excel 寫入與美化工具函式
+# ==========================================
 def write_table_block(ws, df_data, totals, labels, start_row, header_color):
+    """寫入主表格（包含表頭、內容與最底部的合計列）"""
     rows = list(dataframe_to_rows(df_data, index=False, header=True))
     for r_idx, row in enumerate(rows):
         current_excel_row = start_row + r_idx
@@ -156,6 +189,7 @@ def write_table_block(ws, df_data, totals, labels, start_row, header_color):
                 cell.fill = PatternFill(start_color=header_color, end_color=header_color, fill_type="solid")
                 ws.row_dimensions[current_excel_row].height = 60
     
+    # 寫入最後一行「總計」
     last_row = start_row + len(df_data) + 1 
     ws.cell(row=last_row, column=1, value="總計").font = Font(bold=True)
     ws.merge_cells(start_row=last_row, start_column=1, end_row=last_row, end_column=5)
@@ -177,6 +211,7 @@ def write_table_block(ws, df_data, totals, labels, start_row, header_color):
     return last_row + 4
 
 def write_missing_list_section(ws, missing_k_str, missing_sdg_str, start_row):
+    """寫入分頁下方的未關聯課程備註區塊"""
     ws.cell(row=start_row, column=1, value="未關聯任何核心能力之課程").font = Font(bold=True)
     ws.cell(row=start_row, column=1).fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
     cell_content_k = ws.cell(row=start_row, column=2, value=missing_k_str)
@@ -194,6 +229,7 @@ def write_missing_list_section(ws, missing_k_str, missing_sdg_str, start_row):
     return next_row + 2
 
 def set_column_widths(ws, label_count):
+    """設定細節分頁的欄寬"""
     ws.column_dimensions['A'].width = 8  
     ws.column_dimensions['B'].width = 6  
     ws.column_dimensions['C'].width = 40 
@@ -207,14 +243,15 @@ def set_column_widths(ws, label_count):
         ws.column_dimensions[col_letter].width = 15
 
 # ==========================================
-# 建立 K1~K5 與 SDG1~SDG17 兩張歷年統計摘要表
+# 5. 建立「歷年全部總計」分頁 (含 K1~K5 與 SDG 統計表)
 # ==========================================
 def create_summary_dashboard(ws, df_dept, dept_name):
+    """建立第一個分頁：歷年統計摘要大表（包含核心能力與 SDGs 對比表）"""
     ws.views.sheetView[0].showGridLines = True
     unique_years = sorted(df_dept['academic_year'].unique(), reverse=False)
     
     # ----------------------------------------------------------------------
-    # 表格一：課程核心能力 (K1~K5) 歷年統計摘要
+    # 表格一：核心能力 (K1~K5) 歷年統計摘要 (橘色主題)
     # ----------------------------------------------------------------------
     ws.cell(row=2, column=2, value=f"{dept_name} 歷年核心能力符合課程數統計摘要").font = Font(size=13, bold=True)
     
@@ -222,7 +259,7 @@ def create_summary_dashboard(ws, df_dept, dept_name):
     for c_idx, h_text in enumerate(headers_k, 2):
         cell = ws.cell(row=4, column=c_idx, value=h_text)
         cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = PatternFill(start_color="ED7D31", end_color="ED7D31", fill_type="solid") # 橘色
+        cell.fill = PatternFill(start_color="ED7D31", end_color="ED7D31", fill_type="solid")
         cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
         cell.border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     ws.row_dimensions[4].height = 55
@@ -257,7 +294,7 @@ def create_summary_dashboard(ws, df_dept, dept_name):
         cell.border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
         
     # ----------------------------------------------------------------------
-    # 表格二：SDGs (SDG1~SDG17) 歷年統計摘要 (新加入)
+    # 表格二：SDGs (SDG1~SDG17) 歷年統計摘要 (綠色主題)
     # ----------------------------------------------------------------------
     start_sdg_section = current_row + 4
     ws.cell(row=start_sdg_section - 1, column=2, value=f"{dept_name} 歷年 SDGs 符合課程數統計摘要").font = Font(size=13, bold=True)
@@ -266,7 +303,7 @@ def create_summary_dashboard(ws, df_dept, dept_name):
     for c_idx, h_text in enumerate(headers_sdg, 2):
         cell = ws.cell(row=start_sdg_section, column=c_idx, value=h_text)
         cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = PatternFill(start_color="70AD47", end_color="70AD47", fill_type="solid") # 綠色
+        cell.fill = PatternFill(start_color="70AD47", end_color="70AD47", fill_type="solid")
         cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
         cell.border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
     ws.row_dimensions[start_sdg_section].height = 55
@@ -300,17 +337,17 @@ def create_summary_dashboard(ws, df_dept, dept_name):
         cell.alignment = Alignment(horizontal='center')
         cell.border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
 
-    # 調整特定 A、B 欄與動態數據欄寬度，防止文字截斷
+    # 調整摘要表欄寬
     ws.column_dimensions['A'].width = 5
     ws.column_dimensions['B'].width = 18
     for i in range(len(sdg_cols)):
         col_letter = chr(67 + i)
-        if 3 + i > 26: # 超過 Z 欄處理
+        if 3 + i > 26:
             col_letter = chr(64 + (3 + i - 1) // 26) + chr(64 + (3 + i - 1) % 26 + 1)
         ws.column_dimensions[col_letter].width = 24
 
 # ==========================================
-# 6. 主流程
+# 6. 主流程 (按學系/部別產生 Excel 檔案)
 # ==========================================
 def process_dept_export(df_dept, dept_name):
     if df_dept.empty:
@@ -324,7 +361,7 @@ def process_dept_export(df_dept, dept_name):
     
     with pd.ExcelWriter(full_path, engine='openpyxl') as writer:
         
-        # 1. 建立高精簡、無圖表的「歷年全部總計」統計分頁 (含核心能力表 與 SDG 統計表)
+        # 1. 優先建立第一個分頁：「歷年全部總計」摘要大表
         ws_all = writer.book.create_sheet("歷年全部總計")
         create_summary_dashboard(ws_all, df_dept, dept_name)
         
@@ -335,11 +372,17 @@ def process_dept_export(df_dept, dept_name):
             year = int(year)
             
             df_year_total = df_dept[df_dept['academic_year'] == year].copy()
+            
+            # 【關鍵】排序時先將 is_required 轉為標準權重 (必修=1, 選修=0)，確保必修排在最前面
+            df_year_total['is_req_sort'] = df_year_total['is_required'].apply(
+                lambda x: 1 if get_required_str(x) == "必修" else 0
+            )
             df_year_total = df_year_total.sort_values(
-                by=['is_required', 'semester', 'course_code'], 
+                by=['is_req_sort', 'semester', 'course_code'], 
                 ascending=[False, True, True]
             )
             
+            # 建立學年總計細節分頁
             ws_year = writer.book.create_sheet(f"{year}全學年總計")
             ws_year.views.sheetView[0].showGridLines = True
             current_row_y = 1
@@ -356,12 +399,13 @@ def process_dept_export(df_dept, dept_name):
             write_missing_list_section(ws_year, missing_k_str_y, missing_sdg_str_y, current_row_y)
             set_column_widths(ws_year, 17)
             
+            # 建立各學期的獨立細節分頁
             for sem in [1, 2]:
                 df_sem = df_year_total[df_year_total['semester'] == sem].copy()
                 if df_sem.empty: continue
                     
                 sheet_name = f"{year}-{sem}"
-                df_sem = df_sem.sort_values(by=['is_required', 'course_code'], ascending=[False, True])
+                df_sem = df_sem.sort_values(by=['is_req_sort', 'course_code'], ascending=[False, True])
                 
                 ws_sem = writer.book.create_sheet(sheet_name)
                 ws_sem.views.sheetView[0].showGridLines = True
@@ -379,25 +423,29 @@ def process_dept_export(df_dept, dept_name):
                 write_missing_list_section(ws_sem, missing_k_str_s, missing_sdg_s_str, current_row_s)
                 set_column_widths(ws_sem, 17)
                 
+        # 移除 openpyxl 預設建立的空白 Sheet 分頁
         if 'Sheet' in writer.book.sheetnames:
             writer.book.remove(writer.book['Sheet'])
             
-    print(f"匯出成功！")
+    print(f"匯出成功！檔案路徑: {full_path}")
 
-# 執行
-if not df_raw.empty:
-    df_raw['dept_code'] = df_raw['dept_code'].astype(str).str.strip()
-    
-    # 大學部
-    df_undergrad = df_raw[df_raw['dept_code'] == 'B301'].copy()
-    process_dept_export(df_undergrad, "大學部")
-    
-    # 碩士班
-    df_grad = df_raw[df_raw['dept_code'] == 'M301'].copy()
-    process_dept_export(df_grad, "碩士班")
-else:
-    print("資料庫無任何課程資料。")
+# ==========================================
+# 程式執行入口
+# ==========================================
+if __name__ == "__main__":
+    if not df_raw.empty:
+        df_raw['dept_code'] = df_raw['dept_code'].astype(str).str.strip()
+        
+        # 大學部 (B301)
+        df_undergrad = df_raw[df_raw['dept_code'] == 'B301'].copy()
+        process_dept_export(df_undergrad, "大學部")
+        
+        # 碩士班 (M301)
+        df_grad = df_raw[df_raw['dept_code'] == 'M301'].copy()
+        process_dept_export(df_grad, "碩士班")
+    else:
+        print("資料庫無任何課程資料。")
 
-db.close()
-print("-" * 30)
-print(f"全部完成！請檢查: {OUTPUT_DIR_PATH}")
+    db.close()
+    print("-" * 30)
+    print(f"全部完成！請至資料夾檢查匯出檔案: {OUTPUT_DIR_PATH}")

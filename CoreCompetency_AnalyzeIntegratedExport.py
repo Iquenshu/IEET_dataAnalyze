@@ -181,7 +181,7 @@ def write_yearly_comparison_table(ws, year, row_survey, row_grade, start_row=1):
     """
     [單一學年比較表]
     第一欄：評量類型
-    第一列：畢業生問券
+    第一列：畢業生問卷
     第二列：應屆畢業生成績
     """
     
@@ -213,7 +213,7 @@ def write_yearly_comparison_table(ws, year, row_survey, row_grade, start_row=1):
     current_row += 1
     
     # --- 第一列：畢業生問券 ---
-    ws.cell(row=current_row, column=1, value="畢業生問券分析").alignment = Alignment(horizontal='center')
+    ws.cell(row=current_row, column=1, value="畢業生問卷分析").alignment = Alignment(horizontal='center')
     
     if not row_survey.empty:
         # row_survey 是一個 DataFrame (即使只有一列)，取第一列
@@ -257,7 +257,7 @@ def export_integrated_report(df_survey, df_grade, filename_prefix):
         ws_trend = writer.book.create_sheet("歷年趨勢分析", 0)
         
         current_row = 1
-        current_row = write_trend_table(ws_trend, f"【{filename_prefix} 畢業生問券分析 - 歷年變化】", df_survey, current_row)
+        current_row = write_trend_table(ws_trend, f"【{filename_prefix} 畢業生問卷分析 - 歷年變化】", df_survey, current_row)
         
         current_row += 2 
         current_row = write_trend_table(ws_trend, f"【{filename_prefix} 畢業生成績分析 - 歷年變化】", df_grade, current_row)
