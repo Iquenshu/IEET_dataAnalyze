@@ -13,7 +13,7 @@ db_path = 'IEETdatabase.accdb'
 class_file = r'input_files\課程分類表\課程分類表_20260610.xlsx'
 
 # 原始開課課程資料 (維持不變)
-raw_file = r'input_files\開課課程資料\電機系109-113學年度開課課程資料(工程認證用)匯入.xlsx'
+raw_file = r'input_files\開課課程資料\電機系1142學年度開課課程資料(工程認證用).xlsx'
 
 
 # ==========================================
