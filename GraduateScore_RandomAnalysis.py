@@ -11,7 +11,7 @@ import warnings
 # 0. 全域檔案、路徑與門檻設定 (置於最前端便於修改)
 # ==========================================
 # 📌 外部備援分類表路徑設定 (當資料庫 Courses 表找不到時自動啟用)
-BACKUP_CLASS_FILE = r'D:\113年後資料\系辦辦公相關\IEET認證\python程式\PythonIEET\PythonIEET\input_files\課程分類表\課程分類表_20260610.xlsx'
+BACKUP_CLASS_FILE = r'D:\113年後資料\系辦辦公相關\IEET認證\python程式\PythonIEET\PythonIEET\input_files\課程分類表\課程分類表_由資料庫生成_20260819.xlsx'
 
 # 📌 畢業學分檢核基準數設定
 MIN_GRAD_CREDITS_UNDERGRAD = 128  # 大學部最低畢業總學分基準 (128學分)
